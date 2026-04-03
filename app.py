@@ -129,10 +129,6 @@ def main() -> None:
             st.success(st.session_state.pop("_recurring_msg"))
 
         st.subheader("Opret en gentagende opgave")
-        st.caption(
-            "Der oprettes én opgaverække for hver matchende uge de næste 5 år, "
-            "så afkrydsning sker uafhængigt uge for uge."
-        )
 
         with st.form("add_recurring", clear_on_submit=True):
             r_name = st.text_input("Opgavenavn *", max_chars=TASK_NAME_MAX)
