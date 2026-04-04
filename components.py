@@ -181,6 +181,54 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
 
         # Time estimates removed
 
+        # ── Edit subpanel: delete or move task to another week
+        with st.expander("✏️ Rediger opgave"):
+            from sheets import delete_task_by_id, update_task_week
+
+            # Move to a specific week
+            move_key = f"move_week_{task_id}"
+            try:
+                cur_wid = task.get("week_id", "")
+            except Exception:
+                cur_wid = ""
+            # default the selector to current week if present
+            sel_idx_key = move_key + "_idx"
+            target_week = render_week_selector("Flyt til uge", key=move_key)
+            if st.button("Flyt til valgt uge", key=f"btn_move_{task_id}", use_container_width=True):
+                with st.spinner("Flytter opgave…"):
+                    update_task_week(sh, task_id, target_week)
+                st.session_state["_board_msg"] = f"✅ Flyttede **{name}** til **{target_week}**."
+                st.rerun()
+
+            # Quick move to next week
+            try:
+                from tasks import week_start_from_id
+
+                if task.get("week_id"):
+                    start = week_start_from_id(task["week_id"]) + timedelta(weeks=1)
+                    next_wid = week_id_from_date(start)
+                else:
+                    # if no week set, default to this week
+                    next_wid = week_id_from_date(date.today() + timedelta(weeks=1))
+            except Exception:
+                next_wid = week_id_from_date(date.today() + timedelta(weeks=1))
+
+            if st.button("Flyt til næste uge", key=f"btn_move_next_{task_id}", use_container_width=True):
+                with st.spinner("Flytter opgave til næste uge…"):
+                    update_task_week(sh, task_id, next_wid)
+                st.session_state["_board_msg"] = f"✅ Flyttede **{name}** til **{next_wid}**."
+                st.rerun()
+
+            # Delete task (require confirmation checkbox)
+            del_confirm_key = f"del_confirm_{task_id}"
+            confirm = st.checkbox("Slet", key=del_confirm_key)
+            if confirm:
+                if st.button("🗑 Bekræft sletting af opgave", key=f"btn_del_{task_id}", use_container_width=True):
+                    with st.spinner("Sletter opgave…"):
+                        delete_task_by_id(sh, task_id)
+                    st.session_state["_board_msg"] = f"🗑 Slettede **{name}**."
+                    st.rerun()
+
 
 def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fields_fn: Callable) -> None:
     """Render a single unscheduled task as a collapsible expander.
@@ -215,6 +263,19 @@ def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fie
                 f"✅ Tildelte **{name}** til **{week_choice}**."
             )
             st.rerun()
+
+        # ── Edit subpanel for unscheduled tasks: allow deletion
+        with st.expander("✏️ Rediger opgave"):
+            from sheets import delete_task_by_id
+
+            del_confirm_key = f"uns_del_confirm_{task_id}"
+            confirm = st.checkbox("Slet denne opgave permanent", key=del_confirm_key)
+            if confirm:
+                if st.button("🗑 Bekræft sletning af ikke-planlagt opgave", key=f"btn_uns_del_{task_id}", use_container_width=True):
+                    with st.spinner("Sletter opgave…"):
+                        delete_task_by_id(sh, task_id)
+                    st.session_state["_unscheduled_msg"] = f"🗑 Slettede **{name}**."
+                    st.rerun()
 
 # ---------------------------------------------------------------------------
 # Analytics
