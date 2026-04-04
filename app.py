@@ -122,7 +122,7 @@ def main() -> None:
         with st.spinner("Indlæser…"):
             tasks = load_tasks_for_week(sh, week_id)
 
-        render_tasks_section(tasks, sh, update_task_status, week_id=week_id)
+        render_tasks_section(tasks, sh, update_task_status, week_id=week_id, update_fields_fn=update_task_fields)
 
         # Inline add-task form (returns the new task dict on valid submit)
         new_task = render_add_task_form(week_id)

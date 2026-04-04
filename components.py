@@ -154,7 +154,7 @@ def render_week_selector(label: str, key: str) -> str:
 # Individual task card
 # ---------------------------------------------------------------------------
 
-def render_task(task: Dict, sh, update_status_fn: Callable) -> None:
+def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Optional[Callable] = None) -> None:
     """Render a single task as a collapsible expander.
 
     The title shows: status icon · task name · time estimate.
@@ -181,10 +181,20 @@ def render_task(task: Dict, sh, update_status_fn: Callable) -> None:
                 update_status_fn(sh, task_id, new_status)
             st.rerun()
 
-        desc = (task.get("description") or "").strip()
-
-        st.markdown("**Beskrivelse**")
-        st.code(desc if desc else "Ingen beskrivelse.", language=None)
+        # Description: if an update function is provided, allow editing inline
+        cur_desc = (task.get("description") or "").strip()
+        if update_fields_fn:
+            desc_key = f"board_desc_{task_id}"
+            new_desc = st.text_area("**Beskrivelse**", value=cur_desc, key=desc_key, height=120)
+            if st.button("Gem ændringer", key=f"btn_board_save_{task_id}"):
+                with st.spinner("Gemmer…"):
+                    update_fields_fn(sh, task_id, {"description": new_desc.strip()})
+                st.session_state["_board_msg"] = (
+                    f"✅ Gemte ændringer for **{name}**."
+                )
+                st.rerun()
+        else:
+            st.code(cur_desc if cur_desc else "Ingen beskrivelse.", language=None)
 
         st.markdown("**Tidsestimat**")
         st.code(time_str, language=None)
@@ -255,7 +265,7 @@ def render_analytics(tasks: List[Dict]) -> None:
 # Weekly task list
 # ---------------------------------------------------------------------------
 
-def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week_id: str = "") -> None:
+def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week_id: str = "", update_fields_fn: Optional[Callable] = None) -> None:
     """Render tasks grouped by status.
 
     All three status groups are always shown – empty groups display a small
@@ -272,7 +282,7 @@ def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week
         )
         if group:
             for task in group:
-                render_task(task, sh, update_status_fn)
+                render_task(task, sh, update_status_fn, update_fields_fn)
         else:
             st.caption("_Intet her endnu._")
         st.write("")  # breathing room between groups
