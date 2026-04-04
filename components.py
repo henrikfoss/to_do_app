@@ -26,22 +26,7 @@ from tasks import make_task, week_id_from_date, week_start_from_id
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_minutes(task: Dict) -> int:
-    """Safely parse time_estimate_minutes from a task dict."""
-    try:
-        return max(0, int(task.get("time_estimate_minutes") or 0))
-    except (ValueError, TypeError):
-        return 0
-
-
-def _fmt_minutes(total: int) -> str:
-    """Format a minute count using full Danish words, e.g. '1 time 16 minutter'."""
-    if total == 0:
-        return "0 minutter"
-    h, m = divmod(total, 60)
-    hour_str = ("1 time" if h == 1 else f"{h} timer") if h else ""
-    min_str  = ("1 minut" if m == 1 else f"{m} minutter") if m else ""
-    return f"{hour_str} {min_str}".strip()
+# Time estimates removed — no helpers for minutes
 
 
 # Danish abbreviated month names (strftime returns English on most systems)
@@ -62,7 +47,7 @@ def _da_date(d: date) -> str:
 TASK_NAME_MAX = 25
 
 
-def _expander_title(name: str, time_str: str) -> str:
+def _expander_title(name: str) -> str:
     """Build an expander title that pads shorter names with em-spaces so the
     time estimate lands at roughly the same horizontal position regardless of
     how long the task name is.
@@ -71,9 +56,8 @@ def _expander_title(name: str, time_str: str) -> str:
     ~0.5 em, so we divide the character gap by 2 to convert characters → em-spaces,
     then add a small fixed minimum so even a 50-char name still has a gap.
     """
-    gap = max(2, (TASK_NAME_MAX - len(name)) // 2)
-    padding = "\u2003" * gap
-    return f"{name}{padding}{time_str}"
+    # Keep the title simple now that time estimates are removed.
+    return name
 
 
 def _week_label(wid: str) -> str:
@@ -166,9 +150,8 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
         status = "todo"
 
     name = task.get("task_name", "Unnamed task")
-    time_str = _fmt_minutes(_parse_minutes(task))
 
-    with st.expander(_expander_title(name[:TASK_NAME_MAX], time_str)):
+    with st.expander(_expander_title(name[:TASK_NAME_MAX])):
         new_status = st.selectbox(
             "**Status**",
             options=STATUSES,
@@ -196,8 +179,7 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
         else:
             st.code(cur_desc if cur_desc else "Ingen beskrivelse.", language=None)
 
-        st.markdown("**Tidsestimat**")
-        st.code(time_str, language=None)
+        # Time estimates removed
 
 
 def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fields_fn: Callable) -> None:
@@ -208,26 +190,17 @@ def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fie
     """
     task_id = task.get("id", "")
     name = task.get("task_name", "Unnamed task")
-    time_str = _fmt_minutes(_parse_minutes(task))
 
-    with st.expander(_expander_title(name[:TASK_NAME_MAX], time_str)):
-        # Editable description and time estimate
+    with st.expander(_expander_title(name[:TASK_NAME_MAX])):
+        # Editable description
         cur_desc = (task.get("description") or "").strip()
-        cur_time = _parse_minutes(task)
-
         desc_key = f"uns_desc_{task_id}"
-        time_key = f"uns_time_{task_id}"
-
         new_desc = st.text_area("Beskrivelse", value=cur_desc, key=desc_key, height=120)
-        new_time = st.number_input("Tidsestimat (minutter)", min_value=0, max_value=1440, value=cur_time, step=5, key=time_key)
 
         save_key = f"btn_save_{task_id}"
         if st.button("Gem ændringer", key=save_key, use_container_width=True):
             with st.spinner("Gemmer…"):
-                updates = {
-                    "description": new_desc.strip(),
-                    "time_estimate_minutes": str(int(new_time)),
-                }
+                updates = {"description": new_desc.strip()}
                 update_fields_fn(sh, task_id, updates)
             st.session_state["_unscheduled_msg"] = (
                 f"✅ Gemte ændringer for **{name}**."
@@ -248,16 +221,15 @@ def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fie
 # ---------------------------------------------------------------------------
 
 def render_analytics(tasks: List[Dict]) -> None:
-    """Show time totals per status as a row of three metrics."""
+    """Show task counts per status as a row of three metrics."""
     cols = st.columns(3)
     for i, status in enumerate(STATUSES):
         group = [t for t in tasks if (t.get("status") or "todo") == status]
-        total_min = sum(_parse_minutes(t) for t in group)
         with cols[i]:
             st.metric(
                 label=f"{STATUS_ICONS[status]} {STATUS_LABELS[status]}",
-                value=_fmt_minutes(total_min),
-                help=f"{len(group)} task(s)",
+                value=f"{len(group)} opgave(r)",
+                help=None,
             )
 
 
@@ -275,9 +247,8 @@ def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week
 
     for status in STATUSES:
         group = [t for t in tasks if (t.get("status") or "todo") == status]
-        total_min = sum(_parse_minutes(t) for t in group)
         st.markdown(
-            f"**{STATUS_ICONS[status]} {STATUS_LABELS[status]} — {_fmt_minutes(total_min)}**",
+            f"**{STATUS_ICONS[status]} {STATUS_LABELS[status]} — {len(group)} opgave(r)**",
             unsafe_allow_html=True,
         )
         if group:
@@ -343,16 +314,12 @@ def render_edit_tab(sh, current_week_id: str) -> None:
 
     # ── Edit description / time for a specific occurrence or all future ──
     st.divider()
-    st.markdown("**✏️ Rediger beskrivelse og tidsestimat**")
+    st.markdown("**✏️ Rediger beskrivelse**")
 
     # Prefill editable fields from the first instance; user can change scope below
     first_target = instances[0]
     edit_desc_key = f"edit_desc_{first_target['id']}"
-    edit_time_key = f"edit_time_{first_target['id']}"
     new_desc = st.text_area("Beskrivelse", value=(first_target.get("description") or "").strip(), key=edit_desc_key, height=120)
-    new_time = st.number_input(
-        "Tidsestimat (minutter)", min_value=0, max_value=1440, value=_parse_minutes(first_target), step=5, key=edit_time_key
-    )
 
     # Scope: default to editing all future occurrences
     scope = st.radio(
@@ -380,10 +347,7 @@ def render_edit_tab(sh, current_week_id: str) -> None:
         selected_ids = [t["id"] for t in instances]
 
     if st.button("Gem Ændringer", use_container_width=True):
-        updates = {
-            "description": new_desc.strip(),
-            "time_estimate_minutes": str(int(new_time)),
-        }
+        updates = {"description": new_desc.strip()}
         with st.spinner("Gemmer ændringer…"):
             for tid in selected_ids:
                 update_task_fields(sh, tid, updates)
@@ -471,16 +435,15 @@ def render_add_task_form(week_id: str, form_key: str = "add_adhoc") -> Optional[
         with fc1:
             desc = st.text_area("Beskrivelse (valgfri)", height=80)
         with fc2:
-            time_est = st.number_input(
-                "Minutter *", min_value=5, max_value=1440, value=5, step=5
-            )
+            # time estimates removed; keep the column empty for layout
+            st.empty()
         submitted = st.form_submit_button("Tilføj", use_container_width=True)
 
     if submitted:
         if not name.strip():
             st.warning("Opgavenavn er påkrævet.")
             return None
-        return make_task(name.strip(), desc.strip(), week_id, int(time_est))
+        return make_task(name.strip(), desc.strip(), week_id)
     return None
 
 

@@ -49,7 +49,7 @@ def week_label(week_id: str) -> str:
 # Task generation
 # ---------------------------------------------------------------------------
 
-def make_task(task_name: str, description: str, week_id: str, time_estimate_minutes: int = 0) -> Dict:
+def make_task(task_name: str, description: str, week_id: str) -> Dict:
     """Return a single task dict ready to be written to the sheet."""
     return {
         "id": str(uuid.uuid4()),
@@ -57,7 +57,7 @@ def make_task(task_name: str, description: str, week_id: str, time_estimate_minu
         "week_id": week_id,
         "status": "todo",
         "description": description,
-        "time_estimate_minutes": str(max(0, int(time_estimate_minutes))),
+        # time_estimate_minutes removed
         "created_at": date.today().strftime(DATE_FMT),
     }
 
@@ -67,7 +67,6 @@ def generate_recurring_instances(
     description: str,
     start_date: date,
     interval_weeks: int,
-    time_estimate_minutes: int = 0,
 ) -> List[Dict]:
     """Generate one task dict per matching week from *start_date* to ~5 years from today.
 
@@ -94,7 +93,7 @@ def generate_recurring_instances(
     tasks: List[Dict] = []
     current = monday
     while current <= end_date:
-        tasks.append(make_task(task_name, description, week_id_from_date(current), time_estimate_minutes))
+        tasks.append(make_task(task_name, description, week_id_from_date(current)))
         current += timedelta(weeks=interval_weeks)
 
     return tasks

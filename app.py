@@ -41,7 +41,6 @@ task_name               Free text
 week_id                 ISO week string, e.g. "2026-W14"
 status                  "todo" | "in_progress" | "done"
 description             Free text (optional)
-time_estimate_minutes   Integer stored as string
 created_at              YYYY-MM-DD
 """
 
@@ -145,13 +144,12 @@ def main() -> None:
             with rf1:
                 r_desc = st.text_area("Beskrivelse (valgfri)", height=80)
             with rf2:
-                r_time = st.number_input(
-                    "Minutter *", min_value=5, max_value=1440, value=5, step=5
-                )
+                # time estimates removed; keep the column empty for layout
+                st.empty()
             r_wid = render_week_selector("Startende fra uge", key="recurring_start")
             r_interval = st.selectbox(
                 "Gentag hver",
-                options=[1, 2, 3, 4],
+                options=list(range(1, 53)),
                 format_func=lambda x: f"{x} uge{'r' if x > 1 else ''}",
             )
             r_submit = st.form_submit_button("Opret opgaver", use_container_width=True)
@@ -163,7 +161,7 @@ def main() -> None:
                 from tasks import week_start_from_id
                 start_date = week_start_from_id(r_wid)
                 instances = generate_recurring_instances(
-                    r_name.strip(), r_desc.strip(), start_date, int(r_interval), int(r_time)
+                    r_name.strip(), r_desc.strip(), start_date, int(r_interval)
                 )
                 with st.spinner(f"Skriver {len(instances)} opgaverækker til arket…"):
                     add_tasks_batch(sh, instances)

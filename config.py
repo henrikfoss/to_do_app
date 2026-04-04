@@ -9,7 +9,7 @@ TASKS_SHEET = "tasks"
 DATE_FMT = "%Y-%m-%d"
 
 # Column headers (order matters – rows are written in this order)
-TASK_HEADERS = ["id", "task_name", "week_id", "status", "description", "time_estimate_minutes", "created_at"]
+TASK_HEADERS = ["id", "task_name", "week_id", "status", "description", "created_at"]
 
 # Status values stored in the sheet
 STATUSES = ["todo", "in_progress", "done"]
