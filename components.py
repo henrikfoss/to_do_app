@@ -189,6 +189,50 @@ def render_task(task: Dict, sh, update_status_fn: Callable) -> None:
         st.markdown("**Tidsestimat**")
         st.code(time_str, language=None)
 
+
+def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fields_fn: Callable) -> None:
+    """Render a single unscheduled task as a collapsible expander.
+
+    Inside the expander the user can pick a week to assign the task to.
+    The *assign_week_fn* should accept (sh, task_id, new_week_id).
+    """
+    task_id = task.get("id", "")
+    name = task.get("task_name", "Unnamed task")
+    time_str = _fmt_minutes(_parse_minutes(task))
+
+    with st.expander(_expander_title(name[:TASK_NAME_MAX], time_str)):
+        # Editable description and time estimate
+        cur_desc = (task.get("description") or "").strip()
+        cur_time = _parse_minutes(task)
+
+        desc_key = f"uns_desc_{task_id}"
+        time_key = f"uns_time_{task_id}"
+
+        new_desc = st.text_area("Beskrivelse", value=cur_desc, key=desc_key, height=120)
+        new_time = st.number_input("Tidsestimat (minutter)", min_value=0, max_value=1440, value=cur_time, step=5, key=time_key)
+
+        save_key = f"btn_save_{task_id}"
+        if st.button("Gem ændringer", key=save_key, use_container_width=True):
+            with st.spinner("Gemmer…"):
+                updates = {
+                    "description": new_desc.strip(),
+                    "time_estimate_minutes": str(int(new_time)),
+                }
+                update_fields_fn(sh, task_id, updates)
+            st.session_state["_unscheduled_msg"] = (
+                f"✅ Gemte ændringer for **{name}**."
+            )
+            st.rerun()
+        pick_key = f"uns_assign_{task_id}"
+        week_choice = render_week_selector("Tildel til uge", key=pick_key)
+        if st.button("Tildel denne opgave", key=f"btn_assign_{task_id}", use_container_width=True):
+            with st.spinner("Tildeler…"):
+                assign_week_fn(sh, task_id, week_choice)
+            st.session_state["_unscheduled_msg"] = (
+                f"✅ Tildelte **{name}** til **{week_choice}**."
+            )
+            st.rerun()
+
 # ---------------------------------------------------------------------------
 # Analytics
 # ---------------------------------------------------------------------------
@@ -254,7 +298,7 @@ def render_edit_tab(sh, current_week_id: str) -> None:
     built-in keyboard filtering), inspect its future schedule, and delete
     either a single week's instance or every future instance at once.
     """
-    from sheets import load_all_tasks, delete_task_by_id, delete_tasks_by_ids
+    from sheets import load_all_tasks, delete_task_by_id, delete_tasks_by_ids, update_task_fields
 
     if "_edit_msg" in st.session_state:
         st.success(st.session_state.pop("_edit_msg"))
@@ -286,21 +330,58 @@ def render_edit_tab(sh, current_week_id: str) -> None:
         key=lambda t: t["week_id"],
     )
 
-    # ── Task info ──────────────────────────────────────────────────────
-    st.divider()
-    st.markdown(f"### {selected_name}")
 
-    first = instances[0]
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Beskrivelse**")
-        with st.container(border=True):
-            desc = (first.get("description") or "").strip()
-            st.markdown(desc if desc else "_Ingen beskrivelse._")
-    with col2:
-        st.markdown("**Tidsestimat**")
-        with st.container(border=True):
-            st.markdown(_fmt_minutes(_parse_minutes(first)))
+    # ── Edit description / time for a specific occurrence or all future ──
+    st.divider()
+    st.markdown("**✏️ Rediger beskrivelse og tidsestimat**")
+
+    # Prefill editable fields from the first instance; user can change scope below
+    first_target = instances[0]
+    edit_desc_key = f"edit_desc_{first_target['id']}"
+    edit_time_key = f"edit_time_{first_target['id']}"
+    new_desc = st.text_area("Beskrivelse", value=(first_target.get("description") or "").strip(), key=edit_desc_key, height=120)
+    new_time = st.number_input(
+        "Tidsestimat (minutter)", min_value=0, max_value=1440, value=_parse_minutes(first_target), step=5, key=edit_time_key
+    )
+
+    # Scope: default to editing all future occurrences
+    scope = st.radio(
+        "Anvend ændringer på",
+        options=["Rediger for en enkel uge", "Rediger for alle fremtidige forekomster"],
+        index=1,
+        key="edit_scope",
+    )
+
+    # If editing a single week, show the week selector under the fields
+    selected_ids: List[str]
+    if scope.startswith("Rediger for en enkel uge"):
+        edit_weeks = [t["week_id"] for t in instances]
+        sel_wid = st.selectbox(
+            "Vælg forekomst at redigere",
+            edit_weeks,
+            index=0,
+            format_func=_week_label,
+            key="edit_target_wid",
+        )
+        target = next((t for t in instances if t["week_id"] == sel_wid), instances[0])
+        selected_ids = [target["id"]]
+    else:
+        # Apply to all future instances
+        selected_ids = [t["id"] for t in instances]
+
+    if st.button("Gem Ændringer", use_container_width=True):
+        updates = {
+            "description": new_desc.strip(),
+            "time_estimate_minutes": str(int(new_time)),
+        }
+        with st.spinner("Gemmer ændringer…"):
+            for tid in selected_ids:
+                update_task_fields(sh, tid, updates)
+        scope_txt = "kun valgt forekomst" if scope.startswith("Rediger for en enkel uge") else "alle fremtidige"
+        st.session_state["_edit_msg"] = (
+            f"✅ Gemte ændringer for **{selected_name}** ({scope_txt})."
+        )
+        st.rerun()
 
     st.markdown(f"**Kommende uger** — {len(instances)} forekomst(er)")
     with st.container(border=True):
@@ -365,7 +446,7 @@ def render_edit_tab(sh, current_week_id: str) -> None:
 # Inline add-task form
 # ---------------------------------------------------------------------------
 
-def render_add_task_form(week_id: str) -> Optional[Dict]:
+def render_add_task_form(week_id: str, form_key: str = "add_adhoc") -> Optional[Dict]:
     """Render an inline form for adding a one-off task to *week_id*.
 
     Returns the new task dict when the form is submitted with valid input,
@@ -374,7 +455,7 @@ def render_add_task_form(week_id: str) -> Optional[Dict]:
     """
     st.markdown("---")
     st.subheader("➕ Tilføj en opgave")
-    with st.form("add_adhoc", clear_on_submit=True):
+    with st.form(form_key, clear_on_submit=True):
         name = st.text_input("Opgavenavn *", max_chars=TASK_NAME_MAX, placeholder="f.eks. Støvsug kontor")
         fc1, fc2 = st.columns([3, 1])
         with fc1:

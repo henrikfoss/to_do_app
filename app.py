@@ -56,7 +56,15 @@ except ImportError:
     st.error("Required packages missing. Run:  pip install -r requirements.txt")
     raise
 
-from sheets import open_spreadsheet, load_tasks_for_week, add_tasks_batch, update_task_status
+from sheets import (
+    open_spreadsheet,
+    load_tasks_for_week,
+    load_unscheduled_tasks,
+    add_tasks_batch,
+    update_task_status,
+    update_task_week,
+    update_task_fields,
+)
 from tasks import generate_recurring_instances, week_id_from_date
 from datetime import date
 from components import (
@@ -64,6 +72,7 @@ from components import (
     render_week_selector,
     render_tasks_section,
     render_add_task_form,
+    render_unscheduled_task,
     render_edit_tab,
     TASK_NAME_MAX,
 )
@@ -94,8 +103,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Tabs
     # ------------------------------------------------------------------
-    tab_board, tab_recurring, tab_edit = st.tabs(
-        ["📅 Ugeoversigt", "🔁 Gentagende opgaver", "✏️ Rediger opgaver"]
+    tab_board, tab_recurring, tab_unscheduled, tab_edit = st.tabs(
+        ["📅 Ugeoversigt", "🔁 Gentagende opgaver", "⏳ Ikke-planlagte opgaver", "✏️ Rediger opgaver"]
     )
 
     # ── This Week ──────────────────────────────────────────────────────
@@ -163,6 +172,42 @@ def main() -> None:
                     f"(hver {r_interval} uge(r) startende {r_wid})."
                 )
                 st.rerun()
+
+    # ── Unscheduled / Future To-do list ───────────────────────────────────
+    with tab_unscheduled:
+        # Show any pending success message (set before a st.rerun() call)
+        if "_unscheduled_msg" in st.session_state:
+            st.success(st.session_state.pop("_unscheduled_msg"))
+
+        st.subheader("⏳ Ikke-planlagte opgaver")
+
+        st.markdown(
+            "Disse opgaver har ikke fået tildelt en uge endnu. Du kan oprette nye, "
+            "vælge eksisterende og tildele dem til en uge."
+        )
+
+        # Load unscheduled tasks and display them first (overview)
+        with st.spinner("Indlæser…"):
+            unscheduled = load_unscheduled_tasks(sh)
+
+        st.subheader("Ikke-planlagte opgaver")
+        if not unscheduled:
+            st.info("Ingen ikke-planlagte opgaver fundet.")
+        else:
+            for t in unscheduled:
+                render_unscheduled_task(t, sh, update_task_week, update_task_fields)
+
+        st.markdown("---")
+        # Inline add-task form for unscheduled tasks (pass empty week_id)
+        # Use a unique form key so it doesn't collide with the main board's form
+        new_uns = render_add_task_form("", form_key="add_adhoc_unscheduled")
+        if new_uns:
+            with st.spinner("Gemmer…"):
+                add_tasks_batch(sh, [new_uns])
+            st.session_state["_unscheduled_msg"] = (
+                f"✅ '{new_uns['task_name']}' tilføjet til **Ikke-planlagte** opgaver!"
+            )
+            st.rerun()
 
     # ── Edit Tasks ─────────────────────────────────────────────────────
     with tab_edit:

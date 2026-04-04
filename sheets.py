@@ -130,6 +130,16 @@ def load_tasks_for_week(sh: gspread.Spreadsheet, week_id: str) -> List[Dict]:
     return [r for r in _sheet_to_dicts(ws) if r.get("week_id") == week_id]
 
 
+def load_unscheduled_tasks(sh: gspread.Spreadsheet) -> List[Dict]:
+    """Return all tasks that do not have a week_id (unscheduled tasks).
+
+    A task is considered unscheduled when its `week_id` cell is empty or
+    only contains whitespace.
+    """
+    ws = sh.worksheet(TASKS_SHEET)
+    return [r for r in _sheet_to_dicts(ws) if not (r.get("week_id") or "").strip()]
+
+
 def load_all_tasks(sh: gspread.Spreadsheet) -> List[Dict]:
     """Return every task row in the sheet."""
     ws = sh.worksheet(TASKS_SHEET)
@@ -206,4 +216,60 @@ def update_task_status(sh: gspread.Spreadsheet, task_id: str, new_status: str) -
         if len(row) > id_col and row[id_col] == task_id:
             ws.update_cell(row_idx, status_col, new_status)
             return
+
+
+def update_task_week(sh: gspread.Spreadsheet, task_id: str, new_week_id: str) -> None:
+    """Find the row with the given *task_id* and update its week_id cell."""
+    ws = sh.worksheet(TASKS_SHEET)
+    all_rows = ws.get_all_values()
+    if not all_rows:
+        return
+
+    headers = all_rows[0]
+    try:
+        id_col = headers.index("id")
+        week_col = headers.index("week_id") + 1  # 1-based
+    except ValueError:
+        return
+
+    for row_idx, row in enumerate(all_rows[1:], start=2):
+        if len(row) > id_col and row[id_col] == task_id:
+            ws.update_cell(row_idx, week_col, new_week_id)
+            return
+
+
+def update_task_fields(sh: gspread.Spreadsheet, task_id: str, updates: Dict[str, str]) -> None:
+    """Update arbitrary fields for the row matching *task_id*.
+
+    *updates* is a mapping header -> new string value. Only headers present
+    in the sheet will be updated.
+    """
+    if not updates:
+        return
+    ws = sh.worksheet(TASKS_SHEET)
+    all_rows = ws.get_all_values()
+    if not all_rows:
+        return
+
+    headers = all_rows[0]
+    try:
+        id_col = headers.index("id")
+    except ValueError:
+        return
+
+    # Map header -> 1-based column index for present headers
+    col_map = {h: i + 1 for i, h in enumerate(headers)}
+
+    for row_idx, row in enumerate(all_rows[1:], start=2):
+        if len(row) > id_col and row[id_col] == task_id:
+            # Update each supplied header that exists in the sheet
+            for h, val in updates.items():
+                if h in col_map:
+                    try:
+                        ws.update_cell(row_idx, col_map[h], str(val))
+                    except Exception:
+                        # Best-effort: ignore individual cell update failures
+                        pass
+            return
+
 
