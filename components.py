@@ -138,7 +138,7 @@ def render_week_selector(label: str, key: str) -> str:
 # Individual task card
 # ---------------------------------------------------------------------------
 
-def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Optional[Callable] = None) -> None:
+def render_task(task: Dict, sh, all_tasks: List[Dict], update_status_fn: Callable, update_fields_fn: Optional[Callable] = None) -> None:
     """Render a single task as a collapsible expander.
 
     The title shows: status icon · task name · time estimate.
@@ -146,6 +146,8 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
     """
     task_id = task.get("id", "")
     status = task.get("status", "todo")
+    row_idx = task.get("_row_idx")
+    
     if status not in STATUSES:
         status = "todo"
 
@@ -161,7 +163,7 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
         )
         if new_status != status:
             with st.spinner("Gemmer…"):
-                update_status_fn(sh, task_id, new_status)
+                update_status_fn(sh, row_idx, new_status)
             st.rerun()
 
         # Description: if an update function is provided, allow editing inline
@@ -171,7 +173,7 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
             new_desc = st.text_area("**Beskrivelse**", value=cur_desc, key=desc_key, height=120)
             if st.button("Gem ændringer", key=f"btn_board_save_{task_id}"):
                 with st.spinner("Gemmer…"):
-                    update_fields_fn(sh, task_id, {"description": new_desc.strip()})
+                    update_fields_fn(sh, row_idx, {"description": new_desc.strip()})
                 st.session_state["_board_msg"] = (
                     f"✅ Gemte ændringer for **{name}**."
                 )
@@ -196,7 +198,7 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
             target_week = render_week_selector("Flyt til uge", key=move_key)
             if st.button("Flyt til valgt uge", key=f"btn_move_{task_id}", use_container_width=True):
                 with st.spinner("Flytter opgave…"):
-                    update_task_week(sh, task_id, target_week)
+                    update_task_week(sh, row_idx, target_week)
                 st.session_state["_board_msg"] = f"✅ Flyttede **{name}** til **{target_week}**."
                 st.rerun()
 
@@ -215,7 +217,7 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
 
             if st.button("Flyt til næste uge", key=f"btn_move_next_{task_id}", use_container_width=True):
                 with st.spinner("Flytter opgave til næste uge…"):
-                    update_task_week(sh, task_id, next_wid)
+                    update_task_week(sh, row_idx, next_wid)
                 st.session_state["_board_msg"] = f"✅ Flyttede **{name}** til **{next_wid}**."
                 st.rerun()
 
@@ -225,18 +227,19 @@ def render_task(task: Dict, sh, update_status_fn: Callable, update_fields_fn: Op
             if confirm:
                 if st.button("🗑 Bekræft sletting af opgave", key=f"btn_del_{task_id}", use_container_width=True):
                     with st.spinner("Sletter opgave…"):
-                        delete_task_by_id(sh, task_id)
+                        delete_task_by_id(sh, task_id, all_tasks)
                     st.session_state["_board_msg"] = f"🗑 Slettede **{name}**."
                     st.rerun()
 
 
-def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fields_fn: Callable) -> None:
+def render_unscheduled_task(task: Dict, sh, all_tasks: List[Dict], assign_week_fn: Callable, update_fields_fn: Callable) -> None:
     """Render a single unscheduled task as a collapsible expander.
 
     Inside the expander the user can pick a week to assign the task to.
     The *assign_week_fn* should accept (sh, task_id, new_week_id).
     """
     task_id = task.get("id", "")
+    row_idx = task.get("_row_idx")
     name = task.get("task_name", "Unnamed task")
 
     with st.expander(_expander_title(name[:TASK_NAME_MAX])):
@@ -249,7 +252,7 @@ def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fie
         if st.button("Gem ændringer", key=save_key, use_container_width=True):
             with st.spinner("Gemmer…"):
                 updates = {"description": new_desc.strip()}
-                update_fields_fn(sh, task_id, updates)
+                update_fields_fn(sh, row_idx, updates)
             st.session_state["_unscheduled_msg"] = (
                 f"✅ Gemte ændringer for **{name}**."
             )
@@ -258,7 +261,7 @@ def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fie
         week_choice = render_week_selector("Tildel til uge", key=pick_key)
         if st.button("Tildel denne opgave", key=f"btn_assign_{task_id}", use_container_width=True):
             with st.spinner("Tildeler…"):
-                assign_week_fn(sh, task_id, week_choice)
+                assign_week_fn(sh, row_idx, week_choice)
             st.session_state["_unscheduled_msg"] = (
                 f"✅ Tildelte **{name}** til **{week_choice}**."
             )
@@ -273,7 +276,7 @@ def render_unscheduled_task(task: Dict, sh, assign_week_fn: Callable, update_fie
             if confirm:
                 if st.button("🗑 Bekræft sletning af ikke-planlagt opgave", key=f"btn_uns_del_{task_id}", use_container_width=True):
                     with st.spinner("Sletter opgave…"):
-                        delete_task_by_id(sh, task_id)
+                        delete_task_by_id(sh, task_id, all_tasks)
                     st.session_state["_unscheduled_msg"] = f"🗑 Slettede **{name}**."
                     st.rerun()
 
@@ -298,7 +301,7 @@ def render_analytics(tasks: List[Dict]) -> None:
 # Weekly task list
 # ---------------------------------------------------------------------------
 
-def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week_id: str = "", update_fields_fn: Optional[Callable] = None) -> None:
+def render_tasks_section(tasks: List[Dict], sh, all_tasks: List[Dict], update_status_fn: Callable, week_id: str = "", update_fields_fn: Optional[Callable] = None) -> None:
     """Render tasks grouped by status.
 
     All three status groups are always shown – empty groups display a small
@@ -314,7 +317,7 @@ def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week
         )
         if group:
             for task in group:
-                render_task(task, sh, update_status_fn, update_fields_fn)
+                render_task(task, sh, all_tasks, update_status_fn, update_fields_fn)
         else:
             st.caption("_Intet her endnu._")
         st.write("")  # breathing room between groups
@@ -333,22 +336,19 @@ def render_tasks_section(tasks: List[Dict], sh, update_status_fn: Callable, week
 # Edit / delete tasks tab
 # ---------------------------------------------------------------------------
 
-def render_edit_tab(sh, current_week_id: str) -> None:
+def render_edit_tab(sh, current_week_id: str, all_tasks: List[Dict]) -> None:
     """Render the ✏️ Edit Tasks tab.
 
     Lets the user search for a task by name (Streamlit's selectbox has
     built-in keyboard filtering), inspect its future schedule, and delete
     either a single week's instance or every future instance at once.
     """
-    from sheets import load_all_tasks, delete_task_by_id, delete_tasks_by_ids, update_task_fields
+    from sheets import delete_tasks_by_ids, update_tasks_fields_batch, delete_task_by_id
 
     if "_edit_msg" in st.session_state:
         st.success(st.session_state.pop("_edit_msg"))
 
     st.subheader("🔍 Find en opgave")
-
-    with st.spinner("Indlæser opgaver…"):
-        all_tasks = load_all_tasks(sh)
 
     # Only tasks scheduled from the current week onwards
     future = [t for t in all_tasks if t.get("week_id", "") >= current_week_id]
@@ -359,13 +359,19 @@ def render_edit_tab(sh, current_week_id: str) -> None:
 
     # Unique names sorted – selectbox supports typing-to-filter out of the box
     names = sorted({t["task_name"] for t in future})
+    options_with_placeholder = [""] + list(names)
+    
     selected_name = st.selectbox(
-        "Vælg opgave  (skriv for at søge)",
-        names,
+        label="Vælg opgave (skriv for at søge)",
+        options=options_with_placeholder,
+        index=0,
         key="edit_task_name_sel",
     )
+    
+    # Guard clause to prevent logic from running on the blank state
     if not selected_name:
-        return
+        st.info("Vælg venligst en opgave fra listen for at fortsætte.")
+        st.stop()
 
     instances = sorted(
         [t for t in future if t["task_name"] == selected_name],
@@ -391,7 +397,7 @@ def render_edit_tab(sh, current_week_id: str) -> None:
     )
 
     # If editing a single week, show the week selector under the fields
-    selected_ids: List[str]
+    selected_row_ids: List[int]
     if scope.startswith("Rediger for en enkel uge"):
         edit_weeks = [t["week_id"] for t in instances]
         sel_wid = st.selectbox(
@@ -402,16 +408,15 @@ def render_edit_tab(sh, current_week_id: str) -> None:
             key="edit_target_wid",
         )
         target = next((t for t in instances if t["week_id"] == sel_wid), instances[0])
-        selected_ids = [target["id"]]
+        selected_row_ids = [target["_row_idx"]]
     else:
         # Apply to all future instances
-        selected_ids = [t["id"] for t in instances]
+        selected_row_ids = [t["_row_idx"] for t in instances]
 
     if st.button("Gem Ændringer", use_container_width=True):
         updates = {"description": new_desc.strip()}
         with st.spinner("Gemmer ændringer…"):
-            for tid in selected_ids:
-                update_task_fields(sh, tid, updates)
+            update_tasks_fields_batch(sh, {row_idx: updates for row_idx in selected_row_ids})
         scope_txt = "kun valgt forekomst" if scope.startswith("Rediger for en enkel uge") else "alle fremtidige"
         st.session_state["_edit_msg"] = (
             f"✅ Gemte ændringer for **{selected_name}** ({scope_txt})."
@@ -446,7 +451,7 @@ def render_edit_tab(sh, current_week_id: str) -> None:
         target = next((t for t in instances if t["week_id"] == del_wid), None)
         if target:
             with st.spinner("Sletter…"):
-                delete_task_by_id(sh, target["id"])
+                delete_task_by_id(sh, target["id"], all_tasks)
             st.session_state["_edit_msg"] = (
                 f"Slettede **{selected_name}** for {del_wid}."
             )
@@ -467,7 +472,7 @@ def render_edit_tab(sh, current_week_id: str) -> None:
             use_container_width=True,
         ):
             with st.spinner(f"Sletter {len(instances)} rækker…"):
-                delete_tasks_by_ids(sh, [t["id"] for t in instances])
+                delete_tasks_by_ids(sh, [t["id"] for t in instances], all_tasks)
             st.session_state.pop("edit_task_name_sel", None)
             st.session_state.pop("edit_confirm_all", None)
             st.session_state["_edit_msg"] = (

@@ -57,8 +57,7 @@ except ImportError:
 
 from sheets import (
     open_spreadsheet,
-    load_tasks_for_week,
-    load_unscheduled_tasks,
+    load_all_tasks,
     add_tasks_batch,
     update_task_status,
     update_task_week,
@@ -99,6 +98,10 @@ def main() -> None:
 
     sh = st.session_state["_sh"]
 
+    # Load all tasks once to save API read calls
+    with st.spinner("Indlæser…"):
+        all_tasks = load_all_tasks(sh)
+
     # ------------------------------------------------------------------
     # Tabs
     # ------------------------------------------------------------------
@@ -115,13 +118,10 @@ def main() -> None:
         week_id = render_week_navigator()
         st.write("")
 
-        # Always load fresh data from the sheet on every rerun so that
-        # tasks created in the Recurring Tasks tab are immediately visible
-        # after the st.rerun() that follows every write operation.
-        with st.spinner("Indlæser…"):
-            tasks = load_tasks_for_week(sh, week_id)
+        # Filter the loaded tasks for the current week
+        tasks = [t for t in all_tasks if t.get("week_id") == week_id]
 
-        render_tasks_section(tasks, sh, update_task_status, week_id=week_id, update_fields_fn=update_task_fields)
+        render_tasks_section(tasks, sh, all_tasks, update_task_status, week_id=week_id, update_fields_fn=update_task_fields)
 
         # Inline add-task form (returns the new task dict on valid submit)
         new_task = render_add_task_form(week_id)
@@ -184,16 +184,14 @@ def main() -> None:
             "vælge eksisterende og tildele dem til en uge."
         )
 
-        # Load unscheduled tasks and display them first (overview)
-        with st.spinner("Indlæser…"):
-            unscheduled = load_unscheduled_tasks(sh)
+        unscheduled = [t for t in all_tasks if not (t.get("week_id") or "").strip()]
 
         st.subheader("Ikke-planlagte opgaver")
         if not unscheduled:
             st.info("Ingen ikke-planlagte opgaver fundet.")
         else:
             for t in unscheduled:
-                render_unscheduled_task(t, sh, update_task_week, update_task_fields)
+                render_unscheduled_task(t, sh, all_tasks, update_task_week, update_task_fields)
 
         st.markdown("---")
         # Inline add-task form for unscheduled tasks (pass empty week_id)
@@ -209,7 +207,7 @@ def main() -> None:
 
     # ── Edit Tasks ─────────────────────────────────────────────────────
     with tab_edit:
-        render_edit_tab(sh, current_week_id=week_id_from_date(date.today()))
+        render_edit_tab(sh, current_week_id=week_id_from_date(date.today()), all_tasks=all_tasks)
 
 
 if __name__ == "__main__":

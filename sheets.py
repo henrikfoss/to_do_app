@@ -17,7 +17,7 @@ from typing import List, Dict
 
 import streamlit as st
 import gspread
-from gspread.utils import ValueInputOption
+from gspread.utils import ValueInputOption, rowcol_to_a1
 from google.oauth2.service_account import Credentials
 
 from config import TASKS_SHEET, TASK_HEADERS
@@ -105,83 +105,60 @@ def migrate_schema(sh: gspread.Spreadsheet) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _sheet_to_dicts(ws: gspread.Worksheet) -> List[Dict]:
-    """Return all data rows as a list of dicts keyed by header names."""
-    rows = ws.get_all_values()
-    if len(rows) < 2:
-        return []
-    headers = rows[0]
-    return [
-        {headers[i]: (r[i] if i < len(r) else "") for i in range(len(headers))}
-        for r in rows[1:]
-    ]
-
-
-# ---------------------------------------------------------------------------
 # Public CRUD operations
 # ---------------------------------------------------------------------------
 
-def load_tasks_for_week(sh: gspread.Spreadsheet, week_id: str) -> List[Dict]:
-    """Return all tasks whose `week_id` matches the given ISO week string."""
-    ws = sh.worksheet(TASKS_SHEET)
-    return [r for r in _sheet_to_dicts(ws) if r.get("week_id") == week_id]
-
-
-def load_unscheduled_tasks(sh: gspread.Spreadsheet) -> List[Dict]:
-    """Return all tasks that do not have a week_id (unscheduled tasks).
-
-    A task is considered unscheduled when its `week_id` cell is empty or
-    only contains whitespace.
-    """
-    ws = sh.worksheet(TASKS_SHEET)
-    return [r for r in _sheet_to_dicts(ws) if not (r.get("week_id") or "").strip()]
-
-
 def load_all_tasks(sh: gspread.Spreadsheet) -> List[Dict]:
-    """Return every task row in the sheet."""
-    ws = sh.worksheet(TASKS_SHEET)
-    return _sheet_to_dicts(ws)
-
-
-def delete_task_by_id(sh: gspread.Spreadsheet, task_id: str) -> None:
-    """Delete the single row whose `id` matches *task_id*."""
+    """Return every task row in the sheet and caches headers to optimize calls."""
     ws = sh.worksheet(TASKS_SHEET)
     rows = ws.get_all_values()
-    if not rows:
-        return
-    id_col = rows[0].index("id") if "id" in rows[0] else 0
-    for row_idx, row in enumerate(rows[1:], start=2):
-        if len(row) > id_col and row[id_col] == task_id:
-            ws.delete_rows(row_idx)
-            return
+    
+    if rows:
+        st.session_state["_sheet_headers"] = rows[0]
+    else:
+        st.session_state["_sheet_headers"] = TASK_HEADERS
+
+    if len(rows) < 2:
+        return []
+        
+    headers = rows[0]
+    out = []
+    for i, r in enumerate(rows[1:], start=2):
+        d = {headers[j]: (r[j] if j < len(r) else "") for j in range(len(headers))}
+        d["_row_idx"] = i
+        out.append(d)
+    return out
 
 
-def delete_tasks_by_ids(sh: gspread.Spreadsheet, task_ids: List[str]) -> None:
+def delete_task_by_id(sh: gspread.Spreadsheet, task_id: str, all_tasks: List[Dict]) -> None:
+    """Delete the single row whose `id` matches *task_id*."""
+    delete_tasks_by_ids(sh, [task_id], all_tasks)
+
+
+def delete_tasks_by_ids(sh: gspread.Spreadsheet, task_ids: List[str], all_tasks: List[Dict]) -> None:
     """Delete every row whose `id` is in *task_ids*.
 
-    Rewrites the sheet in two API calls (clear + append) so the operation
+    Rewrites the sheet in a single atomic update call so the operation
     is fast even when deleting hundreds of rows at once.
     """
     if not task_ids:
         return
     ws = sh.worksheet(TASKS_SHEET)
-    rows = ws.get_all_values()
-    if not rows:
-        return
-    headers = rows[0]
-    id_col = headers.index("id") if "id" in headers else 0
+    headers = st.session_state.get("_sheet_headers", TASK_HEADERS)
     id_set = set(task_ids)
+    
     kept_data = [
-        row for row in rows[1:]
-        if not (len(row) > id_col and row[id_col] in id_set)
+        [str(t.get(h, "")) for h in headers]
+        for t in all_tasks
+        if t.get("id") not in id_set
     ]
+    
     ws.clear()
-    ws.append_row(headers, value_input_option=ValueInputOption.raw)
+    
     if kept_data:
-        ws.append_rows(kept_data, value_input_option=ValueInputOption.raw)
+        ws.update(values=[headers] + kept_data, range_name='A1', value_input_option=ValueInputOption.raw)
+    else:
+        ws.update(values=[headers], range_name='A1', value_input_option=ValueInputOption.raw)
 
 
 def add_tasks_batch(sh: gspread.Spreadsheet, tasks: List[Dict]) -> None:
@@ -193,83 +170,47 @@ def add_tasks_batch(sh: gspread.Spreadsheet, tasks: List[Dict]) -> None:
     if not tasks:
         return
     ws = sh.worksheet(TASKS_SHEET)
-    sheet_headers = ws.row_values(1)           # actual order in the sheet
-    rows = [[str(t.get(h, "")) for h in sheet_headers] for t in tasks]
+    headers = st.session_state.get("_sheet_headers", TASK_HEADERS)
+    rows = [[str(t.get(h, "")) for h in headers] for t in tasks]
     ws.append_rows(rows, value_input_option=ValueInputOption.raw)
 
 
-def update_task_status(sh: gspread.Spreadsheet, task_id: str, new_status: str) -> None:
-    """Find the row with the given *task_id* and update its status cell."""
-    ws = sh.worksheet(TASKS_SHEET)
-    all_rows = ws.get_all_values()
-    if not all_rows:
-        return
-
-    headers = all_rows[0]
-    try:
-        id_col = headers.index("id")
-        status_col = headers.index("status") + 1  # gspread uses 1-based column index
-    except ValueError:
-        return
-
-    for row_idx, row in enumerate(all_rows[1:], start=2):
-        if len(row) > id_col and row[id_col] == task_id:
-            ws.update_cell(row_idx, status_col, new_status)
-            return
+def update_task_status(sh: gspread.Spreadsheet, row_idx: int, new_status: str) -> None:
+    """Update the status cell for the specific row index."""
+    update_tasks_fields_batch(sh, {row_idx: {"status": new_status}})
 
 
-def update_task_week(sh: gspread.Spreadsheet, task_id: str, new_week_id: str) -> None:
-    """Find the row with the given *task_id* and update its week_id cell."""
-    ws = sh.worksheet(TASKS_SHEET)
-    all_rows = ws.get_all_values()
-    if not all_rows:
-        return
-
-    headers = all_rows[0]
-    try:
-        id_col = headers.index("id")
-        week_col = headers.index("week_id") + 1  # 1-based
-    except ValueError:
-        return
-
-    for row_idx, row in enumerate(all_rows[1:], start=2):
-        if len(row) > id_col and row[id_col] == task_id:
-            ws.update_cell(row_idx, week_col, new_week_id)
-            return
+def update_task_week(sh: gspread.Spreadsheet, row_idx: int, new_week_id: str) -> None:
+    """Update the week_id cell for the specific row index."""
+    update_tasks_fields_batch(sh, {row_idx: {"week_id": new_week_id}})
 
 
-def update_task_fields(sh: gspread.Spreadsheet, task_id: str, updates: Dict[str, str]) -> None:
-    """Update arbitrary fields for the row matching *task_id*.
+def update_task_fields(sh: gspread.Spreadsheet, row_idx: int, updates: Dict[str, str]) -> None:
+    """Update arbitrary fields for the row matching *row_idx*."""
+    update_tasks_fields_batch(sh, {row_idx: updates})
 
-    *updates* is a mapping header -> new string value. Only headers present
-    in the sheet will be updated.
+
+def update_tasks_fields_batch(sh: gspread.Spreadsheet, updates_by_row_idx: Dict[int, Dict[str, str]]) -> None:
+    """Update arbitrary fields for multiple rows in a single API call.
+    
+    *updates_by_row_idx* is a mapping row_idx -> {header -> new string value}.
     """
-    if not updates:
+    if not updates_by_row_idx:
         return
     ws = sh.worksheet(TASKS_SHEET)
-    all_rows = ws.get_all_values()
-    if not all_rows:
-        return
-
-    headers = all_rows[0]
-    try:
-        id_col = headers.index("id")
-    except ValueError:
-        return
-
-    # Map header -> 1-based column index for present headers
+    
+    headers = st.session_state.get("_sheet_headers", TASK_HEADERS)
     col_map = {h: i + 1 for i, h in enumerate(headers)}
+    
+    batch_data = []
 
-    for row_idx, row in enumerate(all_rows[1:], start=2):
-        if len(row) > id_col and row[id_col] == task_id:
-            # Update each supplied header that exists in the sheet
-            for h, val in updates.items():
-                if h in col_map:
-                    try:
-                        ws.update_cell(row_idx, col_map[h], str(val))
-                    except Exception:
-                        # Best-effort: ignore individual cell update failures
-                        pass
-            return
-
-
+    for row_idx, updates in updates_by_row_idx.items():
+        for h, val in updates.items():
+            if h in col_map:
+                batch_data.append({
+                    'range': rowcol_to_a1(row_idx, col_map[h]),
+                    'values': [[str(val)]]
+                })
+                    
+    if batch_data:
+        ws.batch_update(batch_data)
